@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>P0 隧道嵌入测试</title>
+<style>
+  body { margin:0; font:14px/1.6 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif; background:#f7f8fa; color:#1f2328; }
+  .bar { padding:10px 16px; background:#fff; border-bottom:1px solid #e5e7eb; display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+  .bar b { font-weight:600; }
+  input { padding:6px 10px; border:1px solid #d1d5db; border-radius:6px; font:inherit; width:420px; }
+  button { padding:6px 14px; border:0; border-radius:6px; background:#111827; color:#fff; font:inherit; cursor:pointer; }
+  .hint { color:#6b7280; font-size:12px; }
+  .ok { color:#166534; } .bad { color:#b91c1c; }
+  iframe { width:100%; height:calc(100vh - 92px); border:0; background:#fff; }
+  .row { padding:8px 16px; font-size:12px; color:#4b5563; }
+</style>
+</head>
+<body>
+<div class="bar">
+  <b>P0 隧道嵌入测试</b>
+  <input id="url" value="http://127.0.0.1:54321/?token=" placeholder="隧道地址（含 token）">
+  <button onclick="load()">加载</button>
+  <span class="hint">把带 token 的地址贴进来，点加载</span>
+</div>
+<div class="row" id="status">等待加载…</div>
+<iframe id="frame" src="about:blank"></iframe>
+<script>
+function load() {
+  const url = document.getElementById('url').value.trim();
+  const f = document.getElementById('frame');
+  const s = document.getElementById('status');
+  s.textContent = '加载中…';
+  s.className = 'row';
+  f.src = url;
+  f.onload = () => {
+    let text = '';
+    try {
+      // 跨源时拿不到内容，只能确认 onload 触发
+      const d = f.contentDocument;
+      text = d ? '同源，可读 DOM，标题：' + d.title : '已加载（跨源，无法读取 DOM —— 这属正常）';
+    } catch (e) {
+      text = '已加载（跨源不可读，属正常）';
+    }
+    s.textContent = '✅ iframe onload 触发 —— ' + text;
+    s.className = 'row ok';
+  };
+  f.onerror = () => {
+    s.textContent = '❌ iframe 加载失败';
+    s.className = 'row bad';
+  };
+}
+</script>
+</body>
+</html>

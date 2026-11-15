@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>设备连接 — 交互原型</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font: 14px/1.6 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    background: #f7f8fa; color: #1f2328;
+  }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 28px 20px 60px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: #6b7280; font-size: 13px; margin-bottom: 20px; }
+  .mono { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+  .card {
+    background: #fff; border: 1px solid #e5e7eb; border-radius: 10px;
+    padding: 16px 18px; margin-bottom: 14px;
+  }
+  .tabs { display: flex; gap: 6px; background: #eef0f3; padding: 4px; border-radius: 9px; margin-bottom: 18px; }
+  .tabs button {
+    flex: 1; border: 0; background: transparent; padding: 8px 12px; border-radius: 7px;
+    font-size: 14px; cursor: pointer; color: #4b5563;
+  }
+  .tabs button.on { background: #fff; color: #111827; font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,.06); }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .row.between { justify-content: space-between; }
+  label { display: block; font-size: 12px; color: #6b7280; margin-bottom: 5px; }
+  input[type=text], textarea, select {
+    width: 100%; padding: 8px 10px; border: 1px solid #d1d5db; border-radius: 7px;
+    font: inherit; background: #fff;
+  }
+  textarea { resize: vertical; font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+  button.primary {
+    background: #111827; color: #fff; border: 0; padding: 9px 16px; border-radius: 7px;
+    font: inherit; cursor: pointer;
+  }
+  button.primary:disabled { background: #9ca3af; cursor: default; }
+  button.ghost {
+    background: #fff; color: #374151; border: 1px solid #d1d5db; padding: 6px 12px;
+    border-radius: 7px; font: inherit; cursor: pointer; font-size: 13px;
+  }
+  button.danger { color: #b91c1c; border-color: #fca5a5; }
+  .codebox {
+    text-align: center; padding: 18px; background: #f9fafb; border-radius: 9px; margin: 12px 0;
+  }
+  .code {
+    font-family: ui-monospace, Consolas, monospace; font-size: 34px; letter-spacing: 6px;
+    font-weight: 600; color: #111827;
+  }
+  .code.off { color: #d1d5db; }
+  .cd { font-size: 12px; color: #6b7280; margin-top: 4px; }
+  .item { border: 1px solid #eef0f3; border-radius: 9px; padding: 12px 14px; margin-bottom: 10px; }
+  .item h4 { margin: 0 0 2px; font-size: 14px; }
+  .tag {
+    display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 11px;
+    background: #eef2ff; color: #3730a3; margin-left: 6px; vertical-align: middle;
+  }
+  .tag.ok { background: #dcfce7; color: #166534; }
+  .tag.warn { background: #fef3c7; color: #92400e; }
+  .tag.off { background: #fee2e2; color: #991b1b; }
+  .muted { color: #6b7280; font-size: 12px; }
+  .ws { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 13px; }
+  .ws input { width: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid #f1f2f4; }
+  th { color: #6b7280; font-weight: 500; font-size: 12px; }
+  tr.blank td { color: #9ca3af; }
+  .log {
+    background: #0f172a; color: #cbd5e1; border-radius: 9px; padding: 12px 14px;
+    font-family: ui-monospace, Consolas, monospace; font-size: 11.5px; max-height: 220px; overflow: auto;
+  }
+  .log div { white-space: pre-wrap; }
+  .hide { display: none; }
+  .empty { color: #9ca3af; font-size: 13px; padding: 8px 0; }
+  .err { color: #b91c1c; font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>设备连接</h1>
+  <div class="sub" id="me">加载中…</div>
+
+  <div class="tabs">
+    <button id="tab-allow" class="on" onclick="tab('allow')">允许连接本机</button>
+    <button id="tab-connect" onclick="tab('connect')">连接其他设备</button>
+  </div>
+
+  <!-- ============ 允许连接本机 ============ -->
+  <div id="pane-allow">
+    <div class="card">
+      <div class="row between">
+        <div>
+          <label>配对码</label>
+          <div class="muted">对方设备需要输入这个码，一次性使用</div>
+        </div>
+        <div class="row">
+          <select id="ttl" style="width:auto">
+            <option value="120">2 分钟</option>
+            <option value="600">10 分钟</option>
+            <option value="1800" selected>30 分钟</option>
+          </select>
+          <button class="ghost" onclick="newCode()">生成新码</button>
+        </div>
+      </div>
+      <div class="codebox">
+        <div class="code" id="code">— — — — — — — —</div>
+        <div class="cd" id="cd">未生成</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <label>我提供访问的工作区</label>
+      <div class="muted" style="margin-bottom:8px">每行一个绝对路径。对方只能看到这些目录下的会话。</div>
+      <textarea id="wslist" rows="3" placeholder="D:\Projects\demo&#10;D:\Projects\other"></textarea>
+      <div class="row" style="margin-top:10px">
+        <button class="primary" onclick="saveWs()">保存工作区</button>
+        <span class="muted" id="wshint"></span>
+      </div>
+    </div>
+
+    <div class="card">
+      <label>已授权可以控制我的设备</label>
+      <div id="grants"></div>
+    </div>
+  </div>
+
+  <!-- ============ 连接其他设备 ============ -->
+  <div id="pane-connect" class="hide">
+    <div class="card">
+      <label>地址</label>
+      <input type="text" id="addr" placeholder="192.168.1.9:41234 或 100.64.0.4:41234">
+      <div style="height:10px"></div>
+      <label>配对码</label>
+      <input type="text" id="pcode" placeholder="8 位数字" maxlength="8">
+      <div class="row" style="margin-top:12px">
+        <button class="primary" id="pairbtn" onclick="doPair()">添加设备</button>
+        <span class="err" id="pairerr"></span>
+      </div>
+    </div>
+
+    <div class="card">
+      <label>已配对设备</label>
+      <div id="peers"></div>
+      <div id="result" class="hide" style="margin-top:14px"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="row between" style="margin-bottom:10px">
+      <label style="margin:0">运行日志</label>
+      <button class="ghost" onclick="loadLogs()">刷新</button>
+    </div>
+    <div class="log" id="log"></div>
+  </div>
+</div>
+
+<script>
+let S = null;
+
+const $ = (id) => document.getElementById(id);
+
+function tab(which) {
+  $('tab-allow').classList.toggle('on', which === 'allow');
+  $('tab-connect').classList.toggle('on', which === 'connect');
+  $('pane-allow').classList.toggle('hide', which !== 'allow');
+  $('pane-connect').classList.toggle('hide', which !== 'connect');
+}
+
+async function api(path, body) {
+  const r = await fetch(path, body ? {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  } : {});
+  return r.json();
+}
+
+async function load() {
+  S = await api('/api/state');
+  $('me').innerHTML =
+    `本机 <b>${esc(S.name)}</b> · 设备 <span class="mono">${S.deviceId.slice(0,8)}…</span> · ` +
+    `指纹 <span class="mono">${S.fingerprint.slice(0,16)}…</span> · 端口 ${S.peerPort}`;
+  renderCode();
+  renderGrants();
+  renderPeers();
+  if (document.activeElement !== $('wslist')) {
+    $('wslist').value = S.workspaces.map(w => w.path).join('\n');
+    $('wshint').textContent = S.workspaces.length ? `${S.workspaces.length} 个` : '未配置';
+  }
+}
+
+function renderCode() {
+  const p = S.pairing;
+  if (p) {
+    $('code').textContent = p.code;
+    $('code').classList.remove('off');
+    $('cd').textContent = `剩余 ${p.secondsLeft} 秒`;
+  } else {
+    $('code').textContent = '— — — — — — — —';
+    $('code').classList.add('off');
+    $('cd').textContent = '没有有效配对码，点「生成新码」';
+  }
+}
+
+function renderGrants() {
+  const box = $('grants');
+  if (!S.grants.length) { box.innerHTML = '<div class="empty">还没有设备连接过我</div>'; return; }
+  box.innerHTML = S.grants.map(g => {
+    const revoked = !!g.revokedAt;
+    const pol = g.policy;
+    const wsRows = S.workspaces.map(w => {
+      const checked = pol.mode === 'all' || pol.ids.includes(w.id);
+      return `<label class="ws"><input type="checkbox" ${checked ? 'checked' : ''} ${pol.mode === 'all' || revoked ? 'disabled' : ''}
+        onchange="toggleWs('${g.deviceId}','${w.id}',this.checked)"> ${esc(w.name)} <span class="mono muted">${w.id}</span></label>`;
+    }).join('');
+    return `<div class="item">
+      <div class="row between">
+        <div>
+          <h4>${esc(g.displayName)} <span class="tag mono">${g.deviceId.slice(0,8)}…</span>
+            ${revoked ? '<span class="tag off">已撤销</span>' : '<span class="tag ok">已授权</span>'}
+            <span class="tag">${pol.mode === 'all' ? '全部工作区' : '仅选中'}</span>
+          </h4>
+          <div class="muted mono">fp ${g.fingerprint.slice(0,16)}… · ${g.lastSeenAt ? '最近连接 ' + ago(g.lastSeenAt) : '从未连接'}</div>
+        </div>
+        <div class="row">
+          <button class="ghost" onclick="setMode('${g.deviceId}','${pol.mode === 'all' ? 'selected' : 'all'}')">
+            ${pol.mode === 'all' ? '改为仅选中' : '改为全部'}
+          </button>
+          ${revoked ? '' : `<button class="ghost danger" onclick="revoke('${g.deviceId}')">撤销</button>`}
+        </div>
+      </div>
+      <div style="margin-top:8px">${wsRows || '<span class="muted">本机还没有配置工作区</span>'}</div>
+    </div>`;
+  }).join('');
+}
+
+function renderPeers() {
+  const box = $('peers');
+  if (!S.peers.length) { box.innerHTML = '<div class="empty">还没有配对任何设备</div>'; return; }
+  box.innerHTML = S.peers.map(p => `<div class="item">
+    <div class="row between">
+      <div>
+        <h4>${esc(p.displayName)} <span class="tag mono">${p.deviceId.slice(0,8)}…</span>
+          ${p.ticketValid ? '<span class="tag ok">票据有效</span>' : '<span class="tag warn">票据过期</span>'}
+        </h4>
+        <div class="muted mono">${esc(p.address)} · fp ${p.fingerprint.slice(0,16)}…</div>
+      </div>
+      <div class="row">
+        <button class="ghost" onclick="ping('${esc(p.address)}')">测连通</button>
+        <button class="ghost" onclick="remoteWs('${esc(p.address)}')">工作区</button>
+        <button class="ghost" onclick="remoteSessions('${esc(p.address)}')">会话</button>
+        <button class="ghost danger" onclick="unpair('${p.deviceId}')">移除</button>
+      </div>
+    </div>
+  </div>`).join('');
+}
+
+function showResult(html) {
+  const r = $('result');
+  r.classList.remove('hide');
+  r.innerHTML = html;
+}
+
+async function newCode() {
+  const ttl = Number($('ttl').value);
+  await api('/api/code', { ttl });
+  await load(); loadLogs();
+}
+
+async function saveWs() {
+  const list = $('wslist').value.split('\n').map(s => s.trim()).filter(Boolean);
+  await api('/api/workspaces', { list });
+  await load(); loadLogs();
+}
+
+async function setMode(device, mode) {
+  const g = S.grants.find(x => x.deviceId === device);
+  const ids = mode === 'selected' ? (g.policy.mode === 'all' ? S.workspaces.map(w => w.id) : g.policy.ids) : [];
+  await api('/api/policy', { device, mode, ids });
+  await load(); loadLogs();
+}
+
+async function toggleWs(device, wsId, on) {
+  const g = S.grants.find(x => x.deviceId === device);
+  if (!g) return;
+  const ids = new Set(g.policy.ids);
+  on ? ids.add(wsId) : ids.delete(wsId);
+  await api('/api/policy', { device, mode: 'selected', ids: [...ids] });
+  await load(); loadLogs();
+}
+
+async function revoke(device) {
+  if (!confirm('撤销后对方立刻失去访问权，确定？')) return;
+  await api('/api/revoke', { device });
+  await load(); loadLogs();
+}
+
+async function unpair(device) {
+  if (!confirm('从本机移除这个对端？对方需要重新配对。')) return;
+  await api('/api/unpair', { device });
+  await load(); loadLogs();
+}
+
+async function doPair() {
+  const addr = $('addr').value.trim();
+  const code = $('pcode').value.trim();
+  $('pairerr').textContent = '';
+  if (!addr || !code) { $('pairerr').textContent = '地址和配对码都要填'; return; }
+  $('pairbtn').disabled = true;
+  const r = await api('/api/pair', { addr, code });
+  $('pairbtn').disabled = false;
+  if (!r.ok) {
+    $('pairerr').textContent = '配对失败：' + r.reason + (r.detail ? ' (' + r.detail + ')' : '');
+  } else {
+    $('addr').value = ''; $('pcode').value = '';
+    showResult(`<div class="muted">配对成功：<b>${esc(r.peer.displayName)}</b>，指纹已固定 <span class="mono">${r.peer.fingerprint.slice(0,16)}…</span></div>`);
+  }
+  await load(); loadLogs();
+}
+
+async function ping(addr) {
+  const r = await api('/api/peer/hello', { addr });
+  showResult(r.ok ? `<div class="muted">连通正常 · <span class="mono">${esc(addr)}</span></div>`
+    : `<div class="err">连接失败：${r.reason}${r.detail ? ' (' + r.detail + ')' : ''}</div>`);
+  loadLogs();
+}
+
+async function remoteWs(addr) {
+  const r = await api('/api/peer/workspaces', { addr });
+  if (!r.ok) { showResult(`<div class="err">失败：${r.reason}</div>`); return; }
+  const rows = (r.workspaces || []).map(w =>
+    `<tr><td>${esc(w.name)}</td><td class="mono">${w.id}</td><td class="mono muted">${esc(w.path)}</td></tr>`).join('');
+  showResult(`<label>对端授权给本机的工作区（${(r.workspaces||[]).length}）</label>
+    <table><tr><th>名称</th><th>ID</th><th>路径</th></tr>${rows || '<tr><td colspan=3 class="muted">无</td></tr>'}</table>
+    <div class="muted" style="margin-top:8px">对方策略：${r.policy?.mode === 'all' ? '全部工作区' : '仅选中'}</div>`);
+  loadLogs();
+}
+
+async function remoteSessions(addr) {
+  const r = await api('/api/peer/sessions', { addr });
+  if (!r.ok) { showResult(`<div class="err">失败：${r.reason}</div>`); return; }
+  const list = r.sessions || [];
+  const live = list.filter(s => !s.blank);
+  const blank = list.filter(s => s.blank);
+  const rows = [...live, ...blank].map(s => `<tr class="${s.blank ? 'blank' : ''}">
+    <td>${esc(s.title)}${s.blank ? ' <span class="tag">空</span>' : ''}</td>
+    <td class="mono muted">${esc(s.cwd)}</td>
+    <td class="muted">${s.updatedAt ? new Date(s.updatedAt).toLocaleString() : '—'}</td>
+  </tr>`).join('');
+  showResult(`<label>对端会话（${live.length} 条有内容${blank.length ? '，' + blank.length + ' 条空白' : ''}）</label>
+    <table><tr><th>标题</th><th>目录</th><th>最后提问</th></tr>${rows || '<tr><td colspan=3 class="muted">无</td></tr>'}</table>`);
+  loadLogs();
+}
+
+async function loadLogs() {
+  const r = await api('/api/logs');
+  $('log').innerHTML = (r.logs || []).map(l =>
+    `<div>${new Date(l.at).toLocaleTimeString()}  ${esc(l.msg)}</div>`).join('') || '<div class="muted">暂无</div>';
+}
+
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function ago(ts) {
+  const d = Math.round((Date.now() - ts) / 1000);
+  if (d < 60) return d + ' 秒前';
+  if (d < 3600) return Math.round(d / 60) + ' 分钟前';
+  return Math.round(d / 3600) + ' 小时前';
+}
+
+// 倒计时每秒刷新，状态每 3 秒拉一次
+setInterval(() => { if (S) renderCode(); }, 1000);
+setInterval(() => { load().catch(() => {}); }, 3000);
+
+load(); loadLogs();
+</script>
+</body>
+</html>

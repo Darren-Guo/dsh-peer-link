@@ -2,7 +2,53 @@
 
 「设备连接」的传输与授权内核：身份、一次性配对码、双向 mTLS 指纹固定、连接票据、工作区策略、请求桥接。
 
-**不含** DSH 会话桥接与 UI——那属于插件阶段。
+**不含** DSH 会话写入与插件打包——那属于插件阶段。
+
+## 三个入口
+
+| 文件 | 作用 |
+|---|---|
+| `core.js` | 协议与状态内核（CLI 和网页界面共用） |
+| `main.js` | 命令行界面 |
+| `web.js` + `ui.html` | 网页交互原型（能点的界面） |
+
+## 网页界面（推荐先玩这个）
+
+```bash
+npm install
+node web.js --name local --port 41234 --http 41700 --workspaces "/path/to/ws1,/path/to/ws2"
+```
+
+然后浏览器打开 `http://127.0.0.1:41700`。一个进程同时做两件事：
+
+- `41234`：被控端 TLS 服务（等价于 CLI 的 `allow`）
+- `41700`：网页界面 + JSON API
+
+界面上能做：
+
+| 区域 | 操作 |
+|---|---|
+| 允许连接本机 | 生成配对码（带倒计时）、改工作区、看已授权设备、切换 all/仅选中、勾选工作区、撤销 |
+| 连接其他设备 | 填地址+码配对、测连通、查看对端工作区、查看对端会话（空白会话沉底并标记） |
+| 运行日志 | 最近 60 条事件 |
+
+API 也可以直接用：`GET /api/state`、`POST /api/code|workspaces|pair|policy|revoke|unpair`、
+`POST /api/peer/hello|workspaces|sessions`。
+
+## 命令行
+
+```bash
+node main.js allow             --name srv --port 41234 --workspaces "D:\a,D:\b"
+node main.js pair              --name cli --addr host:port --code 12345678
+node main.js hello             --name cli --addr host:port
+node main.js remote-workspaces --name cli --addr host:port
+node main.js sessions          --name cli --addr host:port
+node main.js workspaces        --name srv [--set "D:\a,D:\b"]
+node main.js policy            --name srv --device <id> --mode all|selected [--workspaces id1,id2]
+node main.js revoke            --name srv --device <id>
+node main.js unpair            --name cli --device <id>
+node main.js status            --name srv
+```
 
 ## 设计约束（重要）
 

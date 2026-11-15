@@ -154,6 +154,50 @@ function allowedWorkspaces(st, grant) {
   return all.filter((w) => policy.ids.includes(w.id));
 }
 
+// ---------------- DSH 会话读取 ----------------
+
+function dshSessionsDir(st) {
+  const home = st.dshHome || path.join(os.homedir(), ".dsh");
+  return path.join(home, "storages", "session_projcache", "sessions");
+}
+
+function readSessionFile(full) {
+  const j = JSON.parse(fs.readFileSync(full, "utf8"));
+  const rows = j?.record?.rows || {};
+  const pick = (k) => rows[k]?.val;
+  return {
+    title: pick("title") || "(未命名)",
+    cwd: pick("workingDirectory") || j?.record?.identity?.cwd || "",
+    lastPromptAt: pick("sessionListMetadata")?.lastPromptAt || 0,
+  };
+}
+
+function listSessions(st, grant) {
+  const dir = dshSessionsDir(st);
+  if (!fs.existsSync(dir)) return [];
+  const allowed = allowedWorkspaces(st, grant).map((w) => path.resolve(w.path));
+  const out = [];
+  for (const name of fs.readdirSync(dir)) {
+    if (!name.startsWith("session-") || !name.endsWith(".json")) continue;
+    const full = path.join(dir, name);
+    let info;
+    try {
+      info = readSessionFile(full);
+    } catch {
+      continue;
+    }
+    // 策略过滤：cwd 必须落在允许的工作区里
+    if (allowed.length && !allowed.some((a) => path.resolve(info.cwd).startsWith(a))) continue;
+    out.push({
+      id: name.slice("session-".length, -".json".length),
+      title: info.title,
+      cwd: info.cwd,
+      updatedAt: info.lastPromptAt || fs.statSync(full).mtimeMs,
+    });
+  }
+  return out.sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
 // ---------------- socket 工具 ----------------
 
 function sendLine(sock, obj) {
@@ -188,8 +232,9 @@ function cmdAllow(args) {
   const st = loadState(name);
   if (args.workspaces) {
     st.workspaces = String(args.workspaces).split(",").map((s) => s.trim()).filter(Boolean);
-    saveState(st);
   }
+  st.dshHome = args["dsh-home"] || process.env.DSH_HOME || path.join(os.homedir(), ".dsh");
+  saveState(st);
 
   const code = String(crypto.randomInt(10000000, 99999999));
   const ttlMs = Math.max(30, Number(args.ttl || 120)) * 1000; // --ttl 秒，默认 120
@@ -298,6 +343,17 @@ function cmdAllow(args) {
               const list = allowedWorkspaces(cur, grant);
               const w = list.find((x) => x.id === msg.payload?.id);
               reply = w ? { ok: true, workspace: w } : { ok: false, error: "not-allowed" };
+              break;
+            }
+            case "session.list": {
+              const sessions = listSessions(cur, grant);
+              reply = { ok: true, sessions, policy: grant.policy };
+              break;
+            }
+            case "session.open": {
+              const sessions = listSessions(cur, grant);
+              const s = sessions.find((x) => x.id === msg.payload?.id);
+              reply = s ? { ok: true, session: s } : { ok: false, error: "not-allowed" };
               break;
             }
             default:
@@ -549,15 +605,17 @@ switch (cmd) {
   case "pair": cmdPair(args); break;
   case "hello": cmdHello(args); break;
   case "workspaces": authedRequest(args, "workspaces.list", null, "远端工作区"); break;
+  case "sessions": authedRequest(args, "session.list", null, "远端会话"); break;
   case "policy": cmdPolicy(args); break;
   case "revoke": cmdRevoke(args); break;
   case "status": cmdStatus(args); break;
   default:
     console.log(`用法:
-  allow      --name srv --port 41234 [--ttl 120] [--workspaces "D:\\a,D:\\b"]
+  allow      --name srv --port 41234 [--ttl 120] [--dsh-home ~/.dsh] [--workspaces "D:\\a,D:\\b"]
   pair       --name cli --addr host:port --code 12345678
   hello      --name cli --addr host:port
   workspaces --name cli --addr host:port
+  sessions   --name cli --addr host:port
   policy     --name srv --device <id> --mode all|selected --workspaces id1,id2
   revoke     --name srv --device <id>
   status     --name srv`);

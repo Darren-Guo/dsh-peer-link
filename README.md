@@ -93,7 +93,24 @@ TLS 之上按行分隔 JSON。
 ← {"type":"result","requestId":"…","ok":false,"error":"unknown-method|not-allowed"}
 ```
 
-支持的方法：`ping`、`workspaces.list`、`workspaces.get`。
+支持的方法：`ping`、`workspaces.list`、`workspaces.get`、`session.list`、`session.open`。
+
+### 会话桥接
+
+被控端读取本机 DSH 的会话投影缓存（`$DSH_HOME/storages/session_projcache/sessions/*.json`），
+按工作区策略过滤后返回：
+
+```
+→ {"method":"session.list"}
+← {"ok":true,"sessions":[{"id":"…","title":"…","cwd":"…","updatedAt":…}],"policy":{…}}
+
+→ {"method":"session.open","payload":{"id":"…"}}
+← {"ok":true,"session":{…}}   或   {"ok":false,"error":"not-allowed"}
+```
+
+过滤规则：会话的 `cwd` 必须落在被授权的工作区路径下；`mode=all` 时不过滤。
+
+`--dsh-home` 可指定 DSH 数据目录，默认 `~/.dsh`。
 
 ## 与 Qoder 的对应
 

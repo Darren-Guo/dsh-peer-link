@@ -54,32 +54,107 @@ function readBody(req) {
   });
 }
 
-export async function startHost({ stateName = "local", peerPort = 41234, dshPort = 12790, dshHost = "127.0.0.1" } = {}) {
+export async function startHost({
+  stateName = "local",
+  peerPort = 41234,
+  dshPort = 12790,
+  dshHost = "127.0.0.1",
+  workspaceBridge = null,
+} = {}) {
   // 状态初始化
   const st0 = loadState(stateName);
   st0.dshPort = dshPort;
   st0.dshHost = dshHost;
   saveState(st0);
 
-  // 被控端 TLS（端口可能被上一个实例短暂占用，重试几次）
+  // 被控端 TLS。
+  // 重载插件时，上一版代码启的监听可能还占着端口（旧版没有清理逻辑），
+  // 所以这里先快速试几次，失败后转入后台低频重试，等它释放就自动接管。
   let peerReady = false;
-  for (let attempt = 1; attempt <= 6 && !peerReady; attempt++) {
+  let peerServer = null;
+
+  async function tryListen() {
     try {
-      await startPeerServer({ name: stateName, port: peerPort, host: "0.0.0.0", log: pushLog });
+      peerServer = await startPeerServer({ name: stateName, port: peerPort, host: "0.0.0.0", log: pushLog });
       peerReady = true;
       pushLog(`被控端监听 0.0.0.0:${peerPort}`);
-    } catch (e) {
-      const code = e.code || e.message;
-      if (attempt === 6) pushLog(`被控端启动失败（端口 ${peerPort}）: ${code}`);
-      else {
-        pushLog(`被控端端口 ${peerPort} 不可用（${code}），2 秒后重试 ${attempt}/6`);
-        await new Promise((r) => setTimeout(r, 2000));
+      if (retryTimer) {
+        clearInterval(retryTimer);
+        retryTimer = null;
       }
+      return true;
+    } catch (e) {
+      return e.code || e.message;
+    }
+  }
+
+  let retryTimer = null;
+  for (let attempt = 1; attempt <= 3 && !peerReady; attempt++) {
+    const r = await tryListen();
+    if (r === true) break;
+    if (attempt === 3) {
+      pushLog(`被控端端口 ${peerPort} 暂不可用（${r}），转入后台重试；不影响「连别人」`);
+      retryTimer = setInterval(async () => {
+        if (peerReady) return;
+        const rr = await tryListen();
+        if (rr === true) pushLog("被控端端口已接管");
+      }, 20000);
+      retryTimer.unref?.();
+    } else {
+      await new Promise((r2) => setTimeout(r2, 2000));
     }
   }
 
   /** deviceId → proxy 句柄 */
   const proxies = new Map();
+
+  /** 每个设备一个固定的本地代理端口，让 iframe 地址稳定 */
+  function preferredPortFor(deviceId) {
+    const st = loadState(stateName);
+    const idx = Object.keys(st.peers).indexOf(deviceId);
+    return 41740 + (idx >= 0 ? idx : 0);
+  }
+
+  /**
+   * 把对端的工作区注册成本地真实工作区（影子目录 + workspaceRegistry）。
+   * 名称形如 `[Mac] default-workspace`。
+   */
+  async function syncWorkspaces(devicePrefix) {
+    if (!workspaceBridge) return { ok: false, error: "workspace-bridge-unavailable" };
+    const st = loadState(stateName);
+    const peers = Object.values(st.peers).filter((p) => !devicePrefix || p.deviceId.startsWith(devicePrefix));
+    const results = [];
+
+    for (const peer of peers) {
+      const info = await requestTo({ name: stateName, addr: peer.address, method: "device.info" });
+      if (!info.ok) {
+        results.push({ device: peer.displayName, ok: false, error: info.reason || info.error });
+        continue;
+      }
+      const list = info.workspaces || [];
+      if (!list.length) {
+        results.push({ device: peer.displayName, ok: true, registered: 0, note: "对端没有授权任何工作区" });
+        continue;
+      }
+      peer.workspaces = list;
+      let registered = 0;
+      for (const w of list) {
+        const r = await workspaceBridge.ensure({
+          deviceId: peer.deviceId,
+          deviceName: peer.displayName,
+          workspaceId: w.id,
+          workspaceName: w.name,
+          remotePath: w.path,
+        });
+        if (r && r.ok) registered++;
+        else pushLog(`工作区注册失败 ${w.name}: ${r && r.error}`);
+      }
+      results.push({ device: peer.displayName, ok: true, registered, total: list.length });
+      pushLog(`${peer.displayName}: 注册了 ${registered}/${list.length} 个远端工作区`);
+    }
+    saveState(loadState(stateName));
+    return { ok: true, results };
+  }
 
   async function connectDevice(devicePrefix, tokenOverride) {
     const st = loadState(stateName);
@@ -116,9 +191,12 @@ export async function startHost({ stateName = "local", peerPort = 41234, dshPort
     }
 
     try {
-      const p = await startProxy({ name: stateName, addr: peer.address, remotePort, token, log: pushLog });
+      const preferredPort = preferredPortFor(peer.deviceId);
+      const p = await startProxy({ name: stateName, addr: peer.address, remotePort, token, preferredPort, log: pushLog });
       proxies.set(peer.deviceId, p);
       pushLog(`已连接 ${peer.displayName} → ${p.url}`);
+      // 连接成功后顺带同步远端工作区
+      syncWorkspaces(peer.deviceId).catch(() => {});
       return { ok: true, ...p.info() };
     } catch (e) {
       pushLog(`连接 ${peer.displayName} 失败: ${e.message}`);
@@ -187,6 +265,22 @@ export async function startHost({ stateName = "local", peerPort = 41234, dshPort
     async "POST /api/connect"({ device, token }) {
       return await connectDevice(device, token);
     },
+    async "POST /api/sync"({ device }) {
+      return await syncWorkspaces(device);
+    },
+    async "GET /api/workspace-map"() {
+      const st = loadState(stateName);
+      return {
+        peers: Object.values(st.peers).map((p) => ({
+          deviceId: p.deviceId,
+          displayName: p.displayName,
+          address: p.address,
+          workspaces: p.workspaces || [],
+        })),
+        registered: workspaceBridge ? workspaceBridge.list?.() || [] : [],
+        bridgeReady: !!workspaceBridge,
+      };
+    },
     async "POST /api/disconnect"({ device }) {
       return await disconnectDevice(device);
     },
@@ -232,10 +326,15 @@ export async function startHost({ stateName = "local", peerPort = 41234, dshPort
 
   return {
     apiPort,
+    syncWorkspaces,
     async dispose() {
       for (const p of proxies.values()) await p.close();
       proxies.clear();
       await new Promise((res) => server.close(() => res()));
+      if (peerServer) {
+        await new Promise((res) => peerServer.close(() => res()));
+        pushLog("被控端已关闭");
+      }
     },
   };
 }

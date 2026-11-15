@@ -8,19 +8,34 @@ import { openTunnel, loadState } from "./core.js";
  * 起一个代理。
  * @returns {Promise<{url:string, port:number, close:()=>Promise<void>, info:()=>object}>}
  */
-export async function startProxy({ name, addr, remotePort = 12790, token = null, log = () => {} }) {
+export async function startProxy({ name, addr, remotePort = 12790, token = null, preferredPort = 0, log = () => {} }) {
   const st = loadState(name);
   const peer = Object.values(st.peers).find((p) => p.address === addr) || Object.values(st.peers)[0];
   const TOKEN = token || peer?.dshToken || null;
 
   let cookie = null;
 
-  /** 起监听拿到端口，authority 就是它自己 */
-  const server = http.createServer();
-  await new Promise((res, rej) => {
-    server.once("error", rej);
-    server.listen(0, "127.0.0.1", res);
-  });
+  /** 优先用固定端口，被占用再退回随机 —— 固定端口让 iframe 地址稳定 */
+  async function bind() {
+    const tryPort = (p) =>
+      new Promise((res, rej) => {
+        const s = http.createServer();
+        s.once("error", rej);
+        s.listen(p, "127.0.0.1", () => res(s));
+      });
+    if (preferredPort) {
+      try {
+        const s = await tryPort(preferredPort);
+        log(`代理使用固定端口 ${preferredPort}`);
+        return s;
+      } catch {
+        log(`固定端口 ${preferredPort} 被占用，改用随机端口`);
+      }
+    }
+    return await tryPort(0);
+  }
+
+  const server = await bind();
   const port = server.address().port;
   const AUTHORITY = `127.0.0.1:${port}`;
 

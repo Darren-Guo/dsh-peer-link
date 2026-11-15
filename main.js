@@ -28,7 +28,6 @@ const DATA_DIR = path.join(HERE, "data");
 const CODE_TTL_MS = 120_000;
 const TICKET_TTL_MS = 24 * 3600 * 1000;
 const MAX_QUEUE = 500;
-
 // ---------------- 基础工具 ----------------
 
 function parseArgs(argv) {
@@ -193,7 +192,8 @@ function cmdAllow(args) {
   }
 
   const code = String(crypto.randomInt(10000000, 99999999));
-  st.pairing = { code, expiresAt: Date.now() + CODE_TTL_MS, consumed: false };
+  const ttlMs = Math.max(30, Number(args.ttl || 120)) * 1000; // --ttl 秒，默认 120
+  st.pairing = { code, expiresAt: Date.now() + ttlMs, consumed: false };
   saveState(st);
 
   const server = tls.createServer(
@@ -324,7 +324,7 @@ function cmdAllow(args) {
     console.log("可达地址   :");
     for (const a of lanAddresses()) console.log("   ", a);
     console.log("工作区     :", st.workspaces.length ? st.workspaces.join(", ") : "(未配置，用 --workspaces 指定)");
-    console.log("配对码     :", code, `（${CODE_TTL_MS / 1000} 秒内有效，一次性）`);
+    console.log("配对码     :", code, `（${Math.round(ttlMs / 1000)} 秒内有效，一次性）`);
     console.log("");
   });
 }
@@ -554,7 +554,7 @@ switch (cmd) {
   case "status": cmdStatus(args); break;
   default:
     console.log(`用法:
-  allow      --name srv --port 41234 [--workspaces "D:\\a,D:\\b"]
+  allow      --name srv --port 41234 [--ttl 120] [--workspaces "D:\\a,D:\\b"]
   pair       --name cli --addr host:port --code 12345678
   hello      --name cli --addr host:port
   workspaces --name cli --addr host:port

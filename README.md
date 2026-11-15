@@ -106,6 +106,38 @@ TLS 之上按行分隔 JSON。
 | `X-Peer-Link-Ticket` | `ticket` 字段 |
 | `X-Peer-Relay-Owner`（云中继） | **不实现**：直连即可 |
 
+## 跨机实测记录（Windows ↔ macOS，经 tailnet）
+
+2026-11-15 实跑通过：
+
+```
+Windows 100.64.0.1 ──► Mac 100.64.0.4:41234
+  ✓ 配对成功          码 48510710
+  ✓ 指纹固定          6d110d62b353768d…
+  ✓ 票据签发          24h 有效期
+  ✓ 认证通过          票据 + 指纹 + 授权
+  ✓ 列出远端工作区    2 个（/Users/.../peer-test/ws1、ws2）
+```
+
+### 踩坑：ACL 改完节点不更新
+
+如果两机之间走 tailnet 且 ACL 限定了端口，加端口后**已连接的节点不会立刻刷新 netmap**，表现是：
+
+```
+Mac 侧日记: Drop: TCP{... > 100.64.0.4:41234} no rules matched
+Windows 侧: connect ETIMEDOUT
+```
+
+此时 ACL 内容是对的，Windows 端也已生效（包能发出），只是对端仍用旧规则丢包。
+
+**解法：重启 headscale 容器，强制所有节点重新拉取 netmap。**
+
+```bash
+sudo docker compose -f /opt/headscale/docker-compose.yml restart headscale
+```
+
+约 20–30 秒后生效，不需要重启客户端 Tailscale。
+
 ## 局限
 
 - 票据 24h 过期需重新配对（插件阶段要做续签）

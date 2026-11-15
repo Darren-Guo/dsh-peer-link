@@ -21,7 +21,7 @@ import {
   setPolicy,
   startPeerServer,
   stateSummary,
-} from "./core.js";
+} from "./plugin/lib/core.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 

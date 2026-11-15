@@ -20,7 +20,7 @@ import {
   startPeerServer,
   startTunnelServer,
   stateSummary,
-} from "./core.js";
+} from "./plugin/lib/core.js";
 
 function parseArgs(argv) {
   const out = { _: [] };

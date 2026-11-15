@@ -10,7 +10,10 @@
     "./locale/*.json": "./locale/*.json",
     "./icon": "./icon.svg"
   },
-  "files": ["index.js", "client.js", "cordis.patch.yml", "locale/*.json", "icon.svg"],
+  "files": ["index.js", "client.js", "lib", "cordis.patch.yml", "locale/*.json", "icon.svg"],
+  "dependencies": {
+    "selfsigned": "^2.4.1"
+  },
   "dsh": {
     "bundle": { "patch": "./cordis.patch.yml" },
     "client": {

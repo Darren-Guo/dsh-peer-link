@@ -13,7 +13,7 @@
 
 import http from "node:http";
 import net from "node:net";
-import { openTunnel, loadState } from "./core.js";
+import { openTunnel, loadState } from "./plugin/lib/core.js";
 
 function parseArgs(argv) {
   const out = {};

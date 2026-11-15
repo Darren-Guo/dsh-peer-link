@@ -15,7 +15,8 @@ import { fileURLToPath } from "node:url";
 import selfsigned from "selfsigned";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-export const DATA_DIR = process.env.PEER_DATA_DIR || path.join(HERE, "data");
+// 状态放在稳定的用户目录，不随插件安装位置变化
+export const DATA_DIR = process.env.PEER_DATA_DIR || path.join(os.homedir(), ".dsh", "peer-link");
 export const TICKET_TTL_MS = 24 * 3600 * 1000;
 export const MAX_QUEUE = 500;
 

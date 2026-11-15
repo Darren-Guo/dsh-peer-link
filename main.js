@@ -8,6 +8,7 @@ import {
   lanAddresses,
   listSessions,
   loadState,
+  openTunnel,
   pairTo,
   removePeer,
   requestTo,
@@ -17,6 +18,7 @@ import {
   setPolicy,
   short,
   startPeerServer,
+  startTunnelServer,
   stateSummary,
 } from "./core.js";
 
@@ -43,6 +45,9 @@ async function cmdAllow(args) {
     st0.workspaces = String(args.workspaces).split(",").map((s) => s.trim()).filter(Boolean);
   }
   if (args["dsh-home"]) st0.dshHome = args["dsh-home"];
+  if (args["dsh-port"]) st0.dshPort = Number(args["dsh-port"]);
+  if (args["dsh-host"]) st0.dshHost = args["dsh-host"];
+  if (args["token-file"]) st0.tokenFile = args["token-file"];
   saveState(st0);
 
   const port = Number(args.port || 41234);
@@ -103,6 +108,49 @@ async function cmdRequest(args, method, label) {
   console.log(`--- ${label} ---`);
   console.log(JSON.stringify(r, null, 2));
   if (!r.ok) process.exitCode = 2;
+}
+
+// ---------------- 隧道（P1） ----------------
+
+async function cmdTunnel(args) {
+  if (!args.local) {
+    console.error("用法: node main.js tunnel --name cli --addr host:port --local 54321 [--remote 12790]");
+    process.exit(1);
+  }
+  const log = (m) => console.log(`[${new Date().toLocaleTimeString()}] ${m}`);
+
+  // 先取对端信息与 token，把可用的入口地址打印出来
+  const info = await requestTo({ name: name(args), addr: args.addr, method: "device.info" });
+  let token = null;
+  if (info.ok) {
+    console.log("对端设备 :", info.device?.name, `(${String(info.device?.id || "").slice(0, 8)}…)`);
+    console.log("平台     :", info.platform);
+    console.log("DSH 端口 :", info.dsh?.port);
+    console.log("工作区   :", (info.workspaces || []).map((w) => w.name).join(", ") || "(无)");
+    const tk = await requestTo({ name: name(args), addr: args.addr, method: "dsh.token" });
+    if (tk.ok) {
+      token = tk.token;
+      console.log("token    :", token.slice(0, 8) + "…", "(自动获取)");
+    } else {
+      console.log("token    : 取不到（"+ tk.error + "），请手工从对端启动输出里粘贴");
+    }
+  } else {
+    console.log("取对端信息失败:", info.reason || info.error);
+  }
+
+  const { port } = await startTunnelServer({
+    name: name(args),
+    addr: args.addr,
+    localPort: Number(args.local),
+    remotePort: Number(args.remote || 12790),
+    log,
+  });
+
+  console.log("");
+  console.log("隧道已就绪，浏览器打开：");
+  console.log(`  http://127.0.0.1:${port}/` + (token ? `?token=${token}` : "?token=<粘贴令牌>"));
+  console.log("");
+  console.log("Ctrl+C 结束。");
 }
 
 // ---------------- 管理 ----------------
@@ -197,17 +245,23 @@ switch (cmd) {
   case "workspaces": cmdWorkspaces(args); break;
   case "remote-workspaces": await cmdRequest(args, "workspaces.list", "远端工作区"); break;
   case "sessions": await cmdRequest(args, "session.list", "远端会话"); break;
+  case "info": await cmdRequest(args, "device.info", "对端设备"); break;
+  case "token": await cmdRequest(args, "dsh.token", "对端 DSH 令牌"); break;
+  case "tunnel": await cmdTunnel(args); break;
   case "policy": cmdPolicy(args); break;
   case "revoke": cmdRevoke(args); break;
   case "unpair": cmdUnpair(args); break;
   case "status": cmdStatus(args); break;
   default:
     console.log(`用法:
-  allow             --name srv --port 41234 [--ttl 120] [--dsh-home ~/.dsh] [--workspaces "D:\\a,D:\\b"]
+  allow             --name srv --port 41234 [--ttl 120] [--dsh-home ~/.dsh] [--dsh-port 12790] [--token-file path] [--workspaces "D:\\a,D:\\b"]
   pair              --name cli --addr host:port --code 12345678
   hello             --name cli --addr host:port
+  info              --name cli --addr host:port
+  token             --name cli --addr host:port
   remote-workspaces --name cli --addr host:port
   sessions          --name cli --addr host:port
+  tunnel            --name cli --addr host:port --local 54321 [--remote 12790]
   workspaces        --name srv [--set "D:\\a,D:\\b"]
   policy            --name srv --device <id> --mode all|selected [--workspaces id1,id2]
   revoke            --name srv --device <id>

@@ -6,6 +6,7 @@
 //   * 绑定 0.0.0.0；是否允许连接由配对码 + 证书指纹 + 票据决定，与网络类型无关。
 
 import fs from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import tls from "node:tls";
@@ -49,6 +50,8 @@ export function loadState(name) {
     st.peers = st.peers || {};
     st.grants = st.grants || {};
     st.workspaces = st.workspaces || [];
+    if (!st.dshPort) st.dshPort = 12790;
+    if (!st.dshHost) st.dshHost = "127.0.0.1";
     return st;
   }
   const pems = selfsigned.generate(
@@ -67,6 +70,9 @@ export function loadState(name) {
     pairing: null,
     workspaces: [],
     dshHome: null,
+    dshPort: 12790,
+    dshHost: "127.0.0.1",
+    tokenFile: null,
     queue: [],
     createdAt: Date.now(),
   };
@@ -185,13 +191,66 @@ export function removePeer(name, devicePrefix) {
   return { ok: true, peer: gone };
 }
 
+// ---------------- DSH 自带信息（端口 / launchToken） ----------------
+
+export function dshHomeDir(st) {
+  return st.dshHome || process.env.DSH_HOME || path.join(os.homedir(), ".dsh");
+}
+
+/**
+ * 找 dsh web 的 launchToken。
+ * `dsh web` 启动时会把带 token 的地址写进 <dsh home>/web/web-url-*.txt；
+ * 找不到就返回 null，调用方退化为让用户手工粘贴令牌。
+ */
+export function findLaunchToken(st) {
+  const candidates = [];
+  if (st.tokenFile) candidates.push(st.tokenFile);
+
+  const webDir = path.join(dshHomeDir(st), "web");
+  try {
+    for (const name of fs.readdirSync(webDir)) {
+      if (/^web-url-.*\.txt$/.test(name)) candidates.push(path.join(webDir, name));
+    }
+  } catch {
+    /* 目录不存在 */
+  }
+
+  // 取最近修改的那个
+  const files = candidates
+    .filter((f) => {
+      try {
+        return fs.statSync(f).isFile();
+      } catch {
+        return false;
+      }
+    })
+    .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
+
+  for (const f of files) {
+    try {
+      const text = fs.readFileSync(f, "utf8");
+      const m = text.match(/[?&]token=([A-Za-z0-9_\-]+)/);
+      if (m) return { token: m[1], source: f };
+    } catch {
+      /* 下一个 */
+    }
+  }
+  return null;
+}
+
+/** 该 grant 允许隧道到哪些端口。默认只放行 DSH 自身端口。 */
+export function allowedPorts(st, grant) {
+  const fromPolicy = grant?.policy?.ports;
+  if (Array.isArray(fromPolicy) && fromPolicy.length) return fromPolicy;
+  return [st.dshPort || 12790];
+}
+
 // ---------------- DSH 会话读取 ----------------
 
 export function dshSessionsDir(st) {
   const home = st.dshHome || process.env.DSH_HOME || path.join(os.homedir(), ".dsh");
   return path.join(home, "storages", "session_projcache", "sessions");
 }
-
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // 会话文件命名随 DSH 版本变化：旧 session-<uuid>.json，新 <uuid>.json。
@@ -255,15 +314,18 @@ export function sendLine(sock, obj) {
   sock.write(JSON.stringify(obj) + "\n");
 }
 
+/**
+ * 按行读取 JSON。二进制安全：内部用 Buffer 累积，只把完整行按 UTF-8 解码。
+ * 返回 { detach }：切到隧道模式时调用，摘下监听器并交回尚未消费的原始字节。
+ */
 export function readLines(sock, onMessage) {
-  let buf = "";
-  sock.setEncoding("utf8");
-  sock.on("data", (chunk) => {
-    buf += chunk;
+  let buf = Buffer.alloc(0);
+  const handler = (chunk) => {
+    buf = Buffer.concat([buf, chunk]);
     let idx;
-    while ((idx = buf.indexOf("\n")) >= 0) {
-      const line = buf.slice(0, idx).trim();
-      buf = buf.slice(idx + 1);
+    while ((idx = buf.indexOf(0x0a)) >= 0) {
+      const line = buf.subarray(0, idx).toString("utf8").trim();
+      buf = buf.subarray(idx + 1);
       if (!line) continue;
       try {
         onMessage(JSON.parse(line));
@@ -271,7 +333,16 @@ export function readLines(sock, onMessage) {
         /* 忽略坏行 */
       }
     }
-  });
+  };
+  sock.on("data", handler);
+  return {
+    detach() {
+      sock.off("data", handler);
+      const rest = buf;
+      buf = Buffer.alloc(0);
+      return rest;
+    },
+  };
 }
 
 // ---------------- 被控端：监听 ----------------
@@ -284,8 +355,9 @@ export function startPeerServer({ name, port = 41234, host = "0.0.0.0", log = ()
       (sock) => {
         const peerCert = sock.getPeerCertificate(true);
         const peerFp = peerCert && peerCert.raw ? fpOf(peerCert.raw) : null;
+        const readerRef = { detach: null };
 
-        readLines(sock, (msg) => {
+        const reader = readLines(sock, (msg) => {
           const cur = loadState(name);
 
           // ---- 配对 ----
@@ -329,7 +401,7 @@ export function startPeerServer({ name, port = 41234, host = "0.0.0.0", log = ()
           }
 
           // ---- 重连（票据 + 指纹 + 授权）----
-          if (msg.type === "hello" || msg.type === "request") {
+          if (msg.type === "hello" || msg.type === "request" || msg.type === "tunnel") {
             const grant = cur.grants[msg.deviceId];
             if (!grant || grant.revokedAt) {
               sendLine(sock, { type: "rejected", reason: grant ? "revoked" : "not-granted" });
@@ -361,6 +433,39 @@ export function startPeerServer({ name, port = 41234, host = "0.0.0.0", log = ()
               return;
             }
 
+            // ---- 隧道：校验端口白名单后，该连接退化为原始字节管道 ----
+            if (msg.type === "tunnel") {
+              const wantPort = Number(msg.port);
+              const ports = allowedPorts(cur, grant);
+              if (!ports.includes(wantPort)) {
+                sendLine(sock, { type: "rejected", reason: "port-not-allowed" });
+                log(`隧道被拒: 端口 ${wantPort} 不在白名单 [${ports.join(",")}]`);
+                return;
+              }
+              const leftover = readerRef.detach ? readerRef.detach() : Buffer.alloc(0);
+              // DSH 可能绑在特定网卡上（例如只绑 tailnet 地址），所以出口主机可配置
+              const exitHost = cur.dshHost || "127.0.0.1";
+              const upstream = net.connect({ host: exitHost, port: wantPort });
+              upstream.setNoDelay(true);
+              sock.setNoDelay(true);
+              upstream.on("connect", () => {
+                sendLine(sock, { type: "tunnel-ready", connId: msg.connId || null, port: wantPort });
+                if (leftover.length) upstream.write(leftover);
+                sock.pipe(upstream);
+                upstream.pipe(sock);
+                log(`${grant.displayName} 隧道 → ${exitHost}:${wantPort}`);
+              });
+              upstream.on("error", (e) => {
+                log(`隧道出口失败 ${exitHost}:${wantPort}: ${e.code}`);
+                try {
+                  sendLine(sock, { type: "rejected", reason: "upstream-" + (e.code || "error") });
+                } catch {}
+                sock.destroy();
+              });
+              sock.on("close", () => upstream.destroy());
+              return;
+            }
+
             // ---- 请求处理 ----
             const requestId = msg.requestId || crypto.randomUUID();
             const entry = {
@@ -384,6 +489,22 @@ export function startPeerServer({ name, port = 41234, host = "0.0.0.0", log = ()
                 reply = w ? { ok: true, workspace: w } : { ok: false, error: "not-allowed" };
                 break;
               }
+              case "device.info": {
+                const tk = findLaunchToken(cur);
+                reply = {
+                  ok: true,
+                  device: { id: cur.deviceId, name: cur.name, fingerprint: cur.fingerprint },
+                  platform: process.platform,
+                  dsh: { port: cur.dshPort || 12790, tokenAvailable: !!tk },
+                  workspaces: allowedWorkspaces(cur, grant),
+                };
+                break;
+              }
+              case "dsh.token": {
+                const tk = findLaunchToken(cur);
+                reply = tk ? { ok: true, token: tk.token, source: tk.source } : { ok: false, error: "token-unavailable" };
+                break;
+              }
               case "session.list":
                 reply = { ok: true, sessions: listSessions(cur, grant), policy: grant.policy };
                 break;
@@ -404,6 +525,7 @@ export function startPeerServer({ name, port = 41234, host = "0.0.0.0", log = ()
           }
         });
 
+        readerRef.detach = reader.detach;
         sock.on("error", () => {});
       }
     );
@@ -569,6 +691,91 @@ export async function helloTo({ name, addr }) {
     });
     sendLine(sock, { type: "hello", deviceId: st.deviceId, displayName: name, ticket: peer.ticket });
   });
+}
+
+// ---------------- 控制端：隧道 ----------------
+
+/**
+ * 向对端开一条隧道并完成握手。
+ * resolve { ok:true, sock, leftover } —— 之后 sock 上流的是原始字节；
+ * leftover 是握手期间可能已经到达的字节，必须先写给调用方再开始 pipe。
+ */
+export async function openTunnel({ name, addr, remotePort }) {
+  const st = loadState(name);
+  const peer = resolvePeer(st, addr);
+  if (!peer) return { ok: false, reason: "no-peer" };
+
+  const port = Number(remotePort || peer.dshPort || 12790);
+  const [host, p] = String(peer.address).split(":");
+
+  let sock;
+  try {
+    sock = await openTls(st, host, p);
+  } catch (e) {
+    return { ok: false, reason: "connect-failed", detail: e.message };
+  }
+  const actual = peerFingerprint(sock);
+  if (actual !== peer.fingerprint) {
+    sock.destroy();
+    return { ok: false, reason: "fingerprint-mismatch" };
+  }
+
+  const readerRef = { detach: null };
+  return new Promise((resolve) => {
+    const reader = readLines(sock, (msg) => {
+      if (msg.type === "tunnel-ready") {
+        const leftover = readerRef.detach ? readerRef.detach() : Buffer.alloc(0);
+        resolve({ ok: true, sock, leftover, port });
+      } else if (msg.type === "rejected") {
+        sock.destroy();
+        resolve({ ok: false, reason: msg.reason });
+      }
+    });
+    readerRef.detach = reader.detach;
+    sendLine(sock, {
+      type: "tunnel",
+      deviceId: st.deviceId,
+      displayName: name,
+      ticket: peer.ticket,
+      port,
+      connId: crypto.randomUUID(),
+    });
+  });
+}
+
+/**
+ * 本地隧道服务器：127.0.0.1:<localPort> 的每个连接都开一条到对端的隧道。
+ * 本地端口固定不随重连改变，iframe 的地址因此保持稳定。
+ */
+export async function startTunnelServer({ name, addr, localPort, remotePort, log = () => {} }) {
+  const server = net.createServer(async (client) => {
+    client.setNoDelay(true);
+    const r = await openTunnel({ name, addr, remotePort });
+    if (!r.ok) {
+      log(`隧道建立失败: ${r.reason}`);
+      client.destroy();
+      return;
+    }
+    if (r.leftover && r.leftover.length) client.write(r.leftover);
+    client.pipe(r.sock);
+    r.sock.pipe(client);
+    const kill = () => {
+      client.destroy();
+      r.sock.destroy();
+    };
+    client.on("error", kill);
+    r.sock.on("error", kill);
+    client.on("close", () => r.sock.destroy());
+    r.sock.on("close", () => client.destroy());
+  });
+
+  await new Promise((res, rej) => {
+    server.once("error", rej);
+    server.listen(localPort, "127.0.0.1", res);
+  });
+  const actualPort = server.address().port;
+  log(`本地隧道 127.0.0.1:${actualPort} → ${addr} (远端 ${remotePort || 12790})`);
+  return { server, port: actualPort };
 }
 
 // ---------------- 状态摘要（给 UI 用） ----------------

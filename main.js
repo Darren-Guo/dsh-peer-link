@@ -161,13 +161,28 @@ function dshSessionsDir(st) {
   return path.join(home, "storages", "session_projcache", "sessions");
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// 会话文件命名随 DSH 版本变化：
+//   旧: session-<uuid>.json
+//   新: <uuid>.json
+// 同目录下还混有 mnemon-run-* / mnemon-task-* 等运行态文件，必须排除。
+function sessionIdFromFile(name) {
+  if (!name.endsWith(".json")) return null;
+  const stem = name.slice(0, -".json".length);
+  const bare = stem.startsWith("session-") ? stem.slice("session-".length) : stem;
+  return UUID_RE.test(bare) ? bare : null;
+}
+
 function readSessionFile(full) {
-  const j = JSON.parse(fs.readFileSync(full, "utf8"));
-  const rows = j?.record?.rows || {};
+  // 文件可能带 UTF-8 BOM（Windows 上常见），JSON.parse 遇到会直接报错
+  const text = fs.readFileSync(full, "utf8").replace(/^\uFEFF/, "");
+  const j = JSON.parse(text);
+  const rows = j?.record?.rows || j?.rows || {};
   const pick = (k) => rows[k]?.val;
   return {
     title: pick("title") || "(未命名)",
-    cwd: pick("workingDirectory") || j?.record?.identity?.cwd || "",
+    cwd: pick("workingDirectory") || j?.record?.identity?.cwd || j?.identity?.cwd || "",
     lastPromptAt: pick("sessionListMetadata")?.lastPromptAt || 0,
   };
 }
@@ -178,7 +193,8 @@ function listSessions(st, grant) {
   const allowed = allowedWorkspaces(st, grant).map((w) => path.resolve(w.path));
   const out = [];
   for (const name of fs.readdirSync(dir)) {
-    if (!name.startsWith("session-") || !name.endsWith(".json")) continue;
+    const id = sessionIdFromFile(name);
+    if (!id) continue;
     const full = path.join(dir, name);
     let info;
     try {
@@ -189,7 +205,7 @@ function listSessions(st, grant) {
     // 策略过滤：cwd 必须落在允许的工作区里
     if (allowed.length && !allowed.some((a) => path.resolve(info.cwd).startsWith(a))) continue;
     out.push({
-      id: name.slice("session-".length, -".json".length),
+      id,
       title: info.title,
       cwd: info.cwd,
       updatedAt: info.lastPromptAt || fs.statSync(full).mtimeMs,

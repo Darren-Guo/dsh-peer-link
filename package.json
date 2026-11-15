@@ -1,0 +1,15 @@
+{
+  "name": "peer-device-proto",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Peer device pairing prototype: identity, one-time code, mutual TLS with pinned fingerprints.",
+  "scripts": {
+    "allow": "node main.js allow",
+    "pair": "node main.js pair",
+    "status": "node main.js status"
+  },
+  "dependencies": {
+    "selfsigned": "^2.4.1"
+  }
+}

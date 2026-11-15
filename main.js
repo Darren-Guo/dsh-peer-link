@@ -180,10 +180,14 @@ function readSessionFile(full) {
   const j = JSON.parse(text);
   const rows = j?.record?.rows || j?.rows || {};
   const pick = (k) => rows[k]?.val;
+  const meta = pick("sessionListMetadata") || {};
+  const turns = pick("turnOutline")?.turns;
   return {
-    title: pick("title") || "(未命名)",
+    title: pick("title") || null,
     cwd: pick("workingDirectory") || j?.record?.identity?.cwd || j?.identity?.cwd || "",
-    lastPromptAt: pick("sessionListMetadata")?.lastPromptAt || 0,
+    lastPromptAt: meta.lastPromptAt || 0,
+    // 建了但从未输入过内容的会话：DSH 自己标记 blank，标题为 null
+    blank: meta.blank === true || (Array.isArray(turns) && turns.length === 0 && !pick("title")),
   };
 }
 
@@ -206,12 +210,14 @@ function listSessions(st, grant) {
     if (allowed.length && !allowed.some((a) => path.resolve(info.cwd).startsWith(a))) continue;
     out.push({
       id,
-      title: info.title,
+      title: info.title || "(空白会话)",
       cwd: info.cwd,
       updatedAt: info.lastPromptAt || fs.statSync(full).mtimeMs,
+      blank: info.blank === true,
     });
   }
-  return out.sort((a, b) => b.updatedAt - a.updatedAt);
+  // 有内容的排前面，空白会话沉底
+  return out.sort((a, b) => (a.blank === b.blank ? b.updatedAt - a.updatedAt : a.blank ? 1 : -1));
 }
 
 // ---------------- socket 工具 ----------------

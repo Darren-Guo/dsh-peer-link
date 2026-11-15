@@ -97,18 +97,25 @@ TLS 之上按行分隔 JSON。
 
 ### 会话桥接
 
-被控端读取本机 DSH 的会话投影缓存（`$DSH_HOME/storages/session_projcache/sessions/*.json`），
+被控端读取本机 DSH 的会话投影缓存（`$DSH_HOME/storages/session_projcache/sessions/`），
 按工作区策略过滤后返回：
 
 ```
 → {"method":"session.list"}
-← {"ok":true,"sessions":[{"id":"…","title":"…","cwd":"…","updatedAt":…}],"policy":{…}}
+← {"ok":true,"sessions":[{"id":"…","title":"…","cwd":"…","updatedAt":…,"blank":false}],"policy":{…}}
 
 → {"method":"session.open","payload":{"id":"…"}}
 ← {"ok":true,"session":{…}}   或   {"ok":false,"error":"not-allowed"}
 ```
 
-过滤规则：会话的 `cwd` 必须落在被授权的工作区路径下；`mode=all` 时不过滤。
+**文件命名**：DSH 不同版本写成 `session-<uuid>.json` 或 `<uuid>.json`，两种都认；
+按 UUID 形状识别，`mnemon-run-*` / `mnemon-task-*` 等运行态文件自动排除。
+读取前剥掉 UTF-8 BOM。
+
+**过滤规则**：会话的 `cwd` 必须落在被授权的工作区路径下；`mode=all` 时不过滤。
+
+**`blank` 字段**：DSH 里建了但从未输入过内容的会话（`sessionListMetadata.blank=true`、
+无标题、无回合）标记为 `blank: true`，并排在列表末尾，方便客户端隐藏。
 
 `--dsh-home` 可指定 DSH 数据目录，默认 `~/.dsh`。
 
@@ -135,6 +142,24 @@ Windows 100.64.0.1 ──► Mac 100.64.0.4:41234
   ✓ 认证通过          票据 + 指纹 + 授权
   ✓ 列出远端工作区    2 个（/Users/.../peer-test/ws1、ws2）
 ```
+
+### 跨机验证结果（2026-11-15）
+
+Windows `100.64.0.1` ⇄ Mac `100.64.0.4`，两端都是真实数据：
+
+| 验证项 | 结果 |
+|---|---|
+| 配对（8 位码，一次性） | ✅ |
+| 证书指纹固定（双向 mTLS） | ✅ |
+| 票据签发与校验 | ✅ 跨机 |
+| 工作区策略 `all` | ✅ 返回 3 个工作区 |
+| 工作区策略 `selected[ws1]` | ✅ 只返回 1 个 |
+| 策略切换即时生效（不重启服务） | ✅ 每条消息重新读盘 |
+| `session.list`（`selected[ws1]`） | ✅ 返回 `[]` |
+| `session.list`（`all`） | ✅ 返回 77 条，全部落在授权目录 |
+| 会话计数复核 | ✅ 与独立脚本逐文件统计一致（77/77，无重复） |
+| 空白会话识别 | ✅ 16 条 `blank=true` |
+| 撤销授权 | ✅ `revoked` |
 
 ### 踩坑：ACL 改完节点不更新
 
